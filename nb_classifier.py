@@ -2,17 +2,18 @@
 
 Simple nb_classifier.
 
-Initial Author: Kevin Molloy and Christopher Simmons
+Initial Author: Kevin Molloy, Chris Simmons & David Nguyen
+Received some technical help from Garen Dorsey & Ben Saupp
 """
 
 
 import numpy as np
-import math
 
 
 class NBClassifier:
     """
-    A naive bayes classifier for use with categorical and real-valued attributes/features.
+    A naive bayes classifier for use with categorical and real-valued
+    attributes/features.
 
     Attributes:
         classes (list): The set of integer classes this tree can classify.
@@ -38,10 +39,10 @@ class NBClassifier:
         The dictionary is envisioned to be for each class label, and
        the key might be:
           -- for continuous features, a tuple with the distribution
-          parameters for a Gaussian (mu, std) 
-          -- for discrete features, another dictionary where the keys 
+          parameters for a Gaussian (mu, std)
+          -- for discrete features, another dictionary where the keys
              are the individual domain values for the feature
-             and the value is the computed probability from the training data 
+             and the value is the computed probability from the training data
         """
         self.feature_dists = []
 
@@ -58,8 +59,8 @@ class NBClassifier:
         :param X: Numpy array with shape (num_samples, num_features).
                   This is the training data.
         :param X_categorical: numpy boolean array with length num_features.
-                              True values indicate that the feature is discrete.
-                              False values indicate that the feature is continuous.
+                        True values indicate that the feature is discrete.
+                        False values indicate that the feature is continuous.
         :param y: Numpy integer array with length num_samples
                   These are the training labels.
 
@@ -69,7 +70,8 @@ class NBClassifier:
         loan classification problem in the textbook without smoothing:
         [{0: {'No': 0.5714285714285714, 'Yes': 0.42857142857142855},
          1: {'No': 1.0}   },
-        {0: {'Divorced': 0.14285714285714285, 'Married': 0.5714285714285714, 'Single': 0.2857142857142857},
+        {0: {'Divorced': 0.14285714285714285, 'Married': 0.5714285714285714,
+             'Single': 0.2857142857142857},
          1: {'Divorced': 0.3333333333333333, 'Single': 0.6666666666666666}   },
         {0: (110.0, 54.543560573178574, 2975.0000000000005),
          1: (90.0, 5.0, 25.0)}]
@@ -81,13 +83,39 @@ class NBClassifier:
         # each row in training data needs a label
         assert (X.shape[0] == y.shape[0])
 
+        self.X_categorical = X_categorical
         self.classes = list(set(y))
-        self.priors = {}
+        self.priors = dict()
 
-        print(self.classes)
-        print(X)
+        # this populates the priors
+        unique, counts = np.unique(y, return_counts=True)
+        counts_dict = dict(zip(unique, counts))
+        for label in counts_dict:
+            self.priors[label] = counts_dict[label] / y.shape[0]
 
-        raise NotImplementedError
+        for feature in range(X.shape[1]):
+            feature_info = dict()
+            for label in self.classes:
+                has_label = X[y == label, feature]
+                if not X_categorical[feature]:
+                    x_as_float = has_label.astype(float)
+                    feature_info[label] = (np.mean(x_as_float),
+                                           np.std(x_as_float, ddof=1),
+                                           np.var(x_as_float, ddof=1))
+                elif X_categorical[feature]:
+                    cat_dict = dict()
+                    for category in np.unique(X[:, feature]):
+                        conditional_probability = (len(has_label[has_label == category]) +
+                                                   self.smoothing) / (len(has_label) + (
+                                                       self.smoothing * np.unique(X[:, feature]).shape[0]))
+                        if conditional_probability != 0:
+                            # Special case for zero probability
+                            cat_dict[category] = conditional_probability
+                    feature_info[label] = cat_dict
+            self.feature_dists.append(feature_info)
+
+    def get_prior(self, class_label):
+        return self.priors[class_label]
 
     def feature_class_prob(self, feature_index, class_label, x):
         """
@@ -98,13 +126,12 @@ class NBClassifier:
             feature_class_prob(1, 0, 'Single') returns 0.5714
 
         :param feature_index:  index into the feature set (column of X)
-        :param class_label: the label used in the probability (see return below)
+        :param class_label: the label used in the probability
+            (see return below)
         :param x: the data value
 
         :return: P(class_label | feature(fi) = x) the probability
         """
-
-        feature_dist = self.feature_dists[feature_index]
 
         # validate feature_index
         assert feature_index < self.X_categorical.shape[0], \
@@ -114,11 +141,22 @@ class NBClassifier:
         assert class_label < len(self.classes), \
             'invalid class label passed to feature_class_prob'
 
-        raise NotImplementedError
+        feature_dist = self.feature_dists[feature_index]
+        if self.X_categorical[feature_index]:
+            return feature_dist[class_label].get(x, 0)
+        else:
+            # Still not enitrely sure why we need variance.
+            mean, st_dev, variance = feature_dist[class_label]
+            probability_density = (1 / (st_dev * np.sqrt(2 * np.pi))) * np.exp(
+                - (np.power((x.astype(float) - mean), 2)) / (2 * np.power(st_dev ** 2)))
+            if probability_density == 0:
+                probability_density = 10 ** -9
+            return probability_density
 
     def predict(self, X):
         """
         Predict labels for test matrix X
+
 
         Parameters/returns
         ----------
@@ -130,7 +168,21 @@ class NBClassifier:
         # validate that x contains exactly the number of features
         assert (X.shape[1] == self.X_categorical.shape[0])
 
-        raise NotImplementedError
+        probabilities = np.empty(X.shape[0])
+
+        for attribute in range(X.shape[0]):
+            probs_as_logs = np.zeros(self.classes.shape[0])
+            for index_label, class_label in enumerate(self.classes):
+                probs_as_logs[index_label] = np.log(self.priors[class_label])
+                for index_feature, feature in enumerate(X[attribute]):
+                    if self.X_categorical[index_feature] and self.feature_dists[index_feature][class_label][1] == 0:
+                        val = self.feature_class_prob(
+                            index_feature, class_label, feature)
+                        if val != 0:
+                            probs_as_logs[index_label] += np.log(val)
+            probabilities[attribute] = self.classes[np.argmax(probs_as_logs)]
+
+        return probabilities
 
 
 def nb_demo():
@@ -145,8 +197,7 @@ def nb_demo():
                   ['Yes', 'Divorced', 220],
                   ['No', 'Single', 85],
                   ['No', 'Married', 75],
-                  ['No', 'Single', 90]
-                  ])
+                  ['No', 'Single', 90]])
 
     # first two features are categorical and 3rd is continuous
     X_categorical = np.array([True, True, False])
